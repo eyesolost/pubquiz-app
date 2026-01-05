@@ -289,8 +289,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       `
       )
       .eq("team_id", teamId)
-      .in("question_id", questionIds)
-      .order("question_id");
+      .in("question_id", questionIds);
 
     const formatted =
       data?.map((a: any) => ({
@@ -304,7 +303,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
         question_text: a.questions.question_text,
         question_id: a.question_id,
       })) || [];
-
+      formatted.sort((a, b) => a.question_number - b.question_number);
     setTeamAnswers(formatted);
   };
 
