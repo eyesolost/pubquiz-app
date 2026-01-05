@@ -91,7 +91,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
   const [mainView, setMainView] = useState<
     "overview" | "rounds" | "teams" | "history" | "create-round" | "games" | "game-detail"
   >("overview");
-  const [roundView, setRoundView] = useState<"list" | "detail" | "evaluate">(
+  const [roundView, setRoundView] = useState<"list" | "detail" | "evaluate" | "create">(
     "list"
   );
 
@@ -131,6 +131,12 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       loadRounds();
     }
   }, [activeGame]);
+
+  useEffect(() => {
+    if (selectedGame && mainView === "rounds") {
+      loadRounds();
+    }
+  }, [selectedGame, mainView]);
 
   useEffect(() => {
     if (selectedRound) {
@@ -186,12 +192,13 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
   };
 
   const loadRounds = async () => {
-    if (!activeGame) return;
+    const targetGame = selectedGame || activeGame;
+    if (!targetGame) return;
 
     const { data } = await supabase
       .from("rounds")
       .select("*")
-      .eq("game_id", activeGame.id)
+      .eq("game_id", targetGame.id)
       .order("round_number");
 
     setRounds(data || []);
@@ -304,7 +311,11 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
 
   const createNewRound = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeGame) return;
+    const targetGame = selectedGame || activeGame;
+    if (!targetGame) {
+      alert("Bitte wähle ein Spiel aus!");
+      return;
+    }
 
     const nextRoundNumber = rounds.length + 1;
 
@@ -312,7 +323,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       .from("rounds")
       .insert([
         {
-          game_id: activeGame.id,
+          game_id: targetGame.id,
           round_number: nextRoundNumber,
           category: newCategory,
           status: "waiting",
@@ -336,7 +347,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
     setNewCategory("");
     setNewQuestions(Array(10).fill(""));
     loadRounds();
-    setMainView("rounds");
+    setRoundView("list");
     alert("Runde erfolgreich erstellt!");
   };
 
@@ -444,6 +455,16 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
     setTeamScores(scores);
   };
 
+  const loadGameTeams = async (gameId: string) => {
+    const { data } = await supabase
+      .from("teams")
+      .select("*")
+      .eq("game_id", gameId)
+      .order("name");
+
+    setTeams(data || []);
+  };
+
   const completeGame = async (gameId: string) => {
     setConfirmDialog({
       show: true,
@@ -478,6 +499,86 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
         await loadActiveGame();
         setConfirmDialog({ ...confirmDialog, show: false });
         alert("Spiel reaktiviert!");
+      },
+    });
+  };
+
+  const deleteGame = async (gameId: string) => {
+    setConfirmDialog({
+      show: true,
+      title: "Spiel löschen",
+      message: "Möchten Sie dieses Spiel wirklich löschen? Alle Runden und Antworten werden ebenfalls gelöscht!",
+      onConfirm: async () => {
+        try {
+          // 1. Alle Runden dieses Spiels abrufen
+          const { data: roundsData, error: roundsError } = await supabase
+            .from("rounds")
+            .select("id")
+            .eq("game_id", gameId);
+
+          if (roundsError) throw roundsError;
+
+          // 2. Alle Answers aller Runden dieses Spiels löschen
+          if (roundsData && roundsData.length > 0) {
+            const roundIds = roundsData.map((r) => r.id);
+            
+            // Erst Answers löschen
+            const { data: questionsData } = await supabase
+              .from("questions")
+              .select("id")
+              .in("round_id", roundIds);
+
+            if (questionsData && questionsData.length > 0) {
+              const questionIds = questionsData.map((q) => q.id);
+              const { error: answersError } = await supabase
+                .from("answers")
+                .delete()
+                .in("question_id", questionIds);
+
+              if (answersError) throw answersError;
+            }
+
+            // Dann Questions löschen
+            const { error: deleteQuestionsError } = await supabase
+              .from("questions")
+              .delete()
+              .in("round_id", roundIds);
+
+            if (deleteQuestionsError) throw deleteQuestionsError;
+
+            // Dann Rounds löschen
+            const { error: deleteRoundsError } = await supabase
+              .from("rounds")
+              .delete()
+              .in("id", roundIds);
+
+            if (deleteRoundsError) throw deleteRoundsError;
+          }
+
+          // 3. Teams dieses Spiels löschen
+          const { error: deleteTeamsError } = await supabase
+            .from("teams")
+            .delete()
+            .eq("game_id", gameId);
+
+          if (deleteTeamsError) throw deleteTeamsError;
+
+          // 4. Das Spiel selbst löschen
+          const { error: deleteGameError } = await supabase
+            .from("games")
+            .delete()
+            .eq("id", gameId);
+
+          if (deleteGameError) throw deleteGameError;
+
+          await loadAllGames();
+          setSelectedGame(null);
+          setConfirmDialog({ ...confirmDialog, show: false });
+          alert("Spiel gelöscht!");
+        } catch (error) {
+          console.error("Fehler beim Löschen des Spiels:", error);
+          alert("Fehler beim Löschen des Spiels!");
+        }
       },
     });
   };
@@ -1016,6 +1117,13 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
             </div>
           )}
 
+          {selectedGame && (
+            <div className="text-gray-600 mt-2">
+              Ausgewähltes Spiel:{" "}
+              <span className="font-semibold text-blue-600">{selectedGame.name}</span>
+            </div>
+          )}
+
           <div className="flex gap-2 mt-4 flex-wrap">
             <button
               onClick={() => {
@@ -1042,16 +1150,6 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
               }`}
             >
               Runden
-            </button>
-            <button
-              onClick={() => setMainView("create-round")}
-              className={`px-4 py-2 rounded-lg font-semibold transition ${
-                mainView === "create-round"
-                  ? "bg-red-600 text-white"
-                  : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-              }`}
-            >
-              + Neue Runde
             </button>
             <button
               onClick={() => setMainView("teams")}
@@ -1120,11 +1218,21 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
 
         {mainView === "rounds" && (
           <div className="bg-white rounded-lg shadow-xl p-6">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">
-              Runden-Verwaltung
-            </h2>
-            <div className="space-y-3">
-              {rounds.map((round) => (
+            {roundView === "list" && (
+              <>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-2xl font-bold text-gray-800">
+                    Runden-Verwaltung
+                  </h2>
+                  <button
+                    onClick={() => setRoundView("create")}
+                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-semibold"
+                  >
+                    + Neue Runde
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {rounds.map((round) => (
                 <div
                   key={round.id}
                   className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
@@ -1194,55 +1302,76 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                 </p>
               )}
             </div>
-          </div>
-        )}
+              </>
+            )}
 
-        {mainView === "create-round" && (
-          <div className="bg-white rounded-lg shadow-xl p-6">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">
-              Neue Runde erstellen
-            </h2>
-            <form onSubmit={createNewRound} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Kategorie
-                </label>
-                <input
-                  type="text"
-                  value={newCategory}
-                  onChange={(e) => setNewCategory(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                  placeholder="z.B. Geschichte, Sport, Musik..."
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Fragen (10 Stück)
-                </label>
-                {newQuestions.map((q, index) => (
-                  <input
-                    key={index}
-                    type="text"
-                    value={q}
-                    onChange={(e) => {
-                      const updated = [...newQuestions];
-                      updated[index] = e.target.value;
-                      setNewQuestions(updated);
-                    }}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg mb-2 focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                    placeholder={`Frage ${index + 1}`}
-                    required
-                  />
-                ))}
-              </div>
-              <button
-                type="submit"
-                className="w-full bg-red-600 text-white py-3 rounded-lg font-semibold hover:bg-red-700 transition"
-              >
-                Runde Erstellen
-              </button>
-            </form>
+            {roundView === "create" && (
+              <>
+                <button
+                  onClick={() => setRoundView("list")}
+                  className="flex items-center text-gray-600 hover:text-gray-800 transition mb-4"
+                >
+                  <svg
+                    className="w-5 h-5 mr-2"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                    />
+                  </svg>
+                  Zurück zur Liste
+                </button>
+                <h3 className="text-2xl font-bold text-gray-800 mb-4">
+                  Neue Runde erstellen
+                </h3>
+                <form onSubmit={createNewRound} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Kategorie
+                    </label>
+                    <input
+                      type="text"
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                      placeholder="z.B. Geschichte, Sport, Musik..."
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Fragen (10 Stück)
+                    </label>
+                    {newQuestions.map((q, index) => (
+                      <input
+                        key={index}
+                        type="text"
+                        value={q}
+                        onChange={(e) => {
+                          const updated = [...newQuestions];
+                          updated[index] = e.target.value;
+                          setNewQuestions(updated);
+                        }}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg mb-2 focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                        placeholder={`Frage ${index + 1}`}
+                        required
+                      />
+                    ))}
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full bg-red-600 text-white py-3 rounded-lg font-semibold hover:bg-red-700 transition"
+                  >
+                    Runde Erstellen
+                  </button>
+                </form>
+              </>
+            )}
           </div>
         )}
 
@@ -1318,6 +1447,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                     onClick={() => {
                       setSelectedGame(game);
                       loadGameRounds(game.id);
+                      loadGameTeams(game.id);
                       loadTeamScores(game.id);
                       setMainView("game-detail");
                     }}
@@ -1416,9 +1546,22 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                       {game.status === "completed" && (
                         <button
                           onClick={() => reactivateGame(game.id)}
-                          className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
+                          title="Spiel reaktivieren"
+                          className="p-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
                         >
-                          Reaktivieren
+                          <svg
+                            className="w-5 h-5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                            />
+                          </svg>
                         </button>
                       )}
                       {game.status === "active" && (
@@ -1430,9 +1573,29 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                         </button>
                       )}
                       <button
+                        onClick={() => deleteGame(game.id)}
+                        title="Spiel löschen"
+                        className="p-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                      >
+                        <svg
+                          className="w-5 h-5"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                          />
+                        </svg>
+                      </button>
+                      <button
                         onClick={() => {
                           setSelectedGame(game);
                           loadGameRounds(game.id);
+                          loadGameTeams(game.id);
                           loadTeamScores(game.id);
                           setMainView("game-detail");
                         }}
