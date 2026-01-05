@@ -76,7 +76,7 @@ export default function AdminView({ onBackToHome }: AdminViewProps) {
   const [selectedTeamForEval, setSelectedTeamForEval] = useState<string | null>(
     null
   );
-
+const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.select();
   const [newCategory, setNewCategory] = useState("");
   const [newQuestions, setNewQuestions] = useState<string[]>(
     Array(10).fill("")
@@ -557,8 +557,8 @@ export default function AdminView({ onBackToHome }: AdminViewProps) {
             <div className="space-y-4">
               {teamAnswers.map((answer) => {
                 const currentPoints =
-                  localPoints[answer.id] ?? answer.points ?? 0;
-
+                  localPoints[answer.id] ?? answer.points;
+  
                 return (
                   <div
                     key={answer.id}
@@ -598,15 +598,15 @@ export default function AdminView({ onBackToHome }: AdminViewProps) {
                         max="5"
                         step="0.5"
                         value={currentPoints}
-                        onChange={(e) =>
-                          handlePointsInput(answer.id, e.target.value)
-                        }
+                        onFocus={handleFocus}
+                        onChange={(e) => handlePointsInput(answer.id, e.currentTarget.value)}                     
                         className="w-20 px-3 py-2 text-center text-xl font-bold border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
                       />
 
                       {/* Increment Button */}
                     {/*  <button
                         onClick={() => incrementPoints(answer.id)}
+                        onKeyDown={(e) => handlePointsInput(answer.id, (e.target as HTMLInputElement).value)}
                         className="w-10 h-10 bg-gray-200 hover:bg-gray-300 rounded-lg flex items-center justify-center font-bold text-xl text-gray-700 transition"
                       >
                         +
