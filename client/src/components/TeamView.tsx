@@ -50,9 +50,16 @@ export default function TeamView({ onBackToHome }: TeamViewProps) {
   useEffect(() => {
     if (currentRound) {
       loadQuestions()
-      checkSubmissionStatus()
     }
   }, [currentRound])
+
+  // Lade Antworten, wenn Questions geladen wurden
+  useEffect(() => {
+    if (questions.length > 0) {
+      loadTeamAnswers()
+      checkSubmissionStatus()
+    }
+  }, [questions])
 
   // Lade verfügbare Teams beim Wechsel zum "Beitreten"-Modus
   useEffect(() => {
@@ -122,6 +129,7 @@ export default function TeamView({ onBackToHome }: TeamViewProps) {
       .order('round_number', { ascending: false })
       .limit(1)
       .single()
+      
 
     setCurrentRound(data || null)
   }
@@ -136,6 +144,26 @@ export default function TeamView({ onBackToHome }: TeamViewProps) {
       .order('question_number')
 
     setQuestions(data || [])
+
+    
+  }
+
+  const loadTeamAnswers = async () => {
+    if (!teamId || !currentRound) return
+
+    const { data } = await supabase
+      .from('answers')
+      .select('*')
+      .eq('team_id', teamId)
+      .in('question_id', questions.map(q => q.id))
+
+    if (data) {
+      const loadedAnswers: { [key: string]: string } = {}
+      data.forEach(answer => {
+        loadedAnswers[answer.question_id] = answer.answer_text
+      })
+      setAnswers(loadedAnswers)
+    }
   }
 
   const checkSubmissionStatus = async () => {

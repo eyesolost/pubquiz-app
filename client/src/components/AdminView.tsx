@@ -49,6 +49,12 @@ interface TeamWithAnswers {
   evaluated_count: number;
 }
 
+interface TeamScore {
+  team_id: string;
+  team_name: string;
+  total_points: number;
+}
+
 interface AdminViewProps {
   onBackToHome: () => void;
 }
@@ -83,7 +89,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
   );
 
   const [mainView, setMainView] = useState<
-    "overview" | "rounds" | "teams" | "history" | "create-round"
+    "overview" | "rounds" | "teams" | "history" | "create-round" | "games" | "game-detail"
   >("overview");
   const [roundView, setRoundView] = useState<"list" | "detail" | "evaluate">(
     "list"
@@ -100,6 +106,10 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
   const [localPoints, setLocalPoints] = useState<{
     [answerId: string]: number;
   }>({});
+  const [selectedGame, setSelectedGame] = useState<Game | null>(null);
+  const [gameRounds, setGameRounds] = useState<Round[]>([]);
+  const [teamScores, setTeamScores] = useState<TeamScore[]>([]);
+  const [newGameName, setNewGameName] = useState("");
 
   useEffect(() => {
     const adminAuth = localStorage.getItem("adminAuth");
@@ -163,22 +173,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       .eq("status", "active")
       .single();
 
-    if (!data) {
-      const { data: newGame } = await supabase
-        .from("games")
-        .insert([
-          {
-            name: `Pubquiz ${new Date().getFullYear()}`,
-            date: new Date().toISOString().split("T")[0],
-            status: "active",
-          },
-        ])
-        .select()
-        .single();
-      setActiveGame(newGame || null);
-    } else {
-      setActiveGame(data);
-    }
+    setActiveGame(data || null);
   };
 
   const loadAllGames = async () => {
@@ -408,6 +403,107 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       .eq("id", questionId);
 
     loadQuestions();
+  };
+
+  const loadGameRounds = async (gameId: string) => {
+    const { data } = await supabase
+      .from("rounds")
+      .select("*")
+      .eq("game_id", gameId)
+      .order("round_number");
+
+    setGameRounds(data || []);
+  };
+
+  const loadTeamScores = async (gameId: string) => {
+    const { data: teamsData } = await supabase
+      .from("teams")
+      .select("id, name")
+      .eq("game_id", gameId);
+
+    if (!teamsData) return;
+
+    const scores: TeamScore[] = [];
+
+    for (const team of teamsData) {
+      const { data: answers } = await supabase
+        .from("answers")
+        .select("points")
+        .eq("team_id", team.id)
+        .eq("evaluated", true);
+
+      const total = answers?.reduce((sum, a) => sum + (a.points || 0), 0) || 0;
+      scores.push({
+        team_id: team.id,
+        team_name: team.name,
+        total_points: total,
+      });
+    }
+
+    scores.sort((a, b) => b.total_points - a.total_points);
+    setTeamScores(scores);
+  };
+
+  const completeGame = async (gameId: string) => {
+    setConfirmDialog({
+      show: true,
+      title: "Spiel beenden",
+      message: "Möchten Sie dieses Spiel wirklich beenden?",
+      onConfirm: async () => {
+        await supabase
+          .from("games")
+          .update({ status: "completed" })
+          .eq("id", gameId);
+
+        await loadAllGames();
+        await loadActiveGame();
+        setConfirmDialog({ ...confirmDialog, show: false });
+        alert("Spiel beendet!");
+      },
+    });
+  };
+
+  const reactivateGame = async (gameId: string) => {
+    setConfirmDialog({
+      show: true,
+      title: "Spiel reaktivieren",
+      message: "Möchten Sie dieses Spiel reaktivieren?",
+      onConfirm: async () => {
+        await supabase
+          .from("games")
+          .update({ status: "active" })
+          .eq("id", gameId);
+
+        await loadAllGames();
+        await loadActiveGame();
+        setConfirmDialog({ ...confirmDialog, show: false });
+        alert("Spiel reaktiviert!");
+      },
+    });
+  };
+
+  const createNewGame = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const { data, error } = await supabase
+      .from("games")
+      .insert([
+        {
+          name: newGameName,
+          date: new Date().toISOString().split("T")[0],
+          status: "active",
+        },
+      ])
+      .select()
+      .single();
+
+    if (data && !error) {
+      await loadAllGames();
+      setNewGameName("");
+      alert(`Neues Spiel "${data.name}" erstellt!`);
+    } else {
+      alert("Fehler beim Erstellen des Spiels: " + error?.message);
+    }
   };
 
   const evaluateAnswer = async (answerId: string, points: number) => {
@@ -662,6 +758,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
     const canEvaluate =
       selectedRound.status === "active" || selectedRound.status === "completed";
     const isReadOnly = selectedRound.status === "active";
+    const canRestart = selectedRound.status === "completed" && teamsWithAnswers.length < teams.length|| selectedRound.status === "active" && teamsWithAnswers.length < teams.length;
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-red-500 to-orange-600 p-4">
@@ -814,6 +911,17 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
             </div>
           )}
 
+          {canRestart && (
+            <div className="bg-white rounded-lg shadow-xl p-6 mt-6">
+              <button
+                onClick={() => startRound(selectedRound.id)}
+                className="w-full bg-red-600 text-white py-3 rounded-lg font-semibold hover:bg-red-700 transition"
+              >
+                Runde neu starten
+              </button>
+            </div>
+          )}
+
           {canEvaluate && teamsWithAnswers.length === 0 && (
             <div className="bg-white rounded-lg shadow-xl p-6">
               <p className="text-center text-gray-500 py-8">
@@ -954,6 +1062,16 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
               }`}
             >
               Teams
+            </button>
+            <button
+              onClick={() => setMainView("games")}
+              className={`px-4 py-2 rounded-lg font-semibold transition ${
+                mainView === "games"
+                  ? "bg-red-600 text-white"
+                  : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+              }`}
+            >
+              Spiele
             </button>
             <button
               onClick={() => setMainView("history")}
@@ -1196,11 +1314,261 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                         : "Archiviert"}
                     </span>
                   </div>
-                  <p className="text-sm text-gray-500 italic">
-                    Rankings folgen in zukünftiger Version
-                  </p>
+                  <button
+                    onClick={() => {
+                      setSelectedGame(game);
+                      loadGameRounds(game.id);
+                      loadTeamScores(game.id);
+                      setMainView("game-detail");
+                    }}
+                    className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+                  >
+                    Details anzeigen
+                  </button>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {mainView === "games" && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-lg shadow-xl p-6">
+              <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                Spiele-Verwaltung
+              </h2>
+              
+              {activeGame && (
+                <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h3 className="font-semibold text-gray-800">
+                        Aktives Spiel: {activeGame.name}
+                      </h3>
+                      <p className="text-sm text-gray-600">
+                        {new Date(activeGame.date).toLocaleDateString("de-DE")}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => completeGame(activeGame.id)}
+                      className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700"
+                    >
+                      Spiel beenden
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <form onSubmit={createNewGame} className="space-y-4">
+                <h3 className="text-lg font-semibold text-gray-700">
+                  Neues Spiel erstellen
+                </h3>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Spiel-Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newGameName}
+                    onChange={(e) => setNewGameName(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                    placeholder="z.B. Pubquiz Winterturnier 2026"
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="w-full bg-red-600 text-white py-3 rounded-lg font-semibold hover:bg-red-700 transition"
+                >
+                  Neues Spiel Erstellen
+                </button>
+              </form>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-xl p-6">
+              <h3 className="text-xl font-semibold text-gray-700 mb-4">
+                Alle Spiele
+              </h3>
+              <div className="space-y-3">
+                {allGames.map((game) => (
+                  <div
+                    key={game.id}
+                    className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
+                  >
+                    <div>
+                      <h4 className="font-semibold text-gray-800">
+                        {game.name}
+                      </h4>
+                      <p className="text-sm text-gray-600">
+                        {new Date(game.date).toLocaleDateString("de-DE")}
+                      </p>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                      <span
+                        className={`text-xs px-2 py-1 rounded ${
+                          game.status === "active"
+                            ? "bg-green-100 text-green-800"
+                            : "bg-gray-100 text-gray-800"
+                        }`}
+                      >
+                        {game.status === "active" ? "Aktiv" : "Beendet"}
+                      </span>
+                      {game.status === "completed" && (
+                        <button
+                          onClick={() => reactivateGame(game.id)}
+                          className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
+                        >
+                          Reaktivieren
+                        </button>
+                      )}
+                      {game.status === "active" && (
+                        <button
+                          onClick={() => completeGame(game.id)}
+                          className="px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 text-sm"
+                        >
+                          Beenden
+                        </button>
+                      )}
+                      <button
+                        onClick={() => {
+                          setSelectedGame(game);
+                          loadGameRounds(game.id);
+                          loadTeamScores(game.id);
+                          setMainView("game-detail");
+                        }}
+                        className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+                      >
+                        Details
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {mainView === "game-detail" && selectedGame && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-lg shadow-xl p-6">
+              <div className="flex justify-between items-center mb-6">
+                <div>
+                  <button
+                    onClick={() => setMainView("games")}
+                    className="flex items-center text-gray-600 hover:text-gray-800 transition mb-4"
+                  >
+                    <svg
+                      className="w-5 h-5 mr-2"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M10 19l-7-7m0 0l7-7m-7 7h18"
+                      />
+                    </svg>
+                    Zurück zur Spiele-Liste
+                  </button>
+                  <h2 className="text-2xl font-bold text-gray-800">
+                    {selectedGame.name}
+                  </h2>
+                  <p className="text-gray-600">
+                    {new Date(selectedGame.date).toLocaleDateString("de-DE")}
+                  </p>
+                </div>
+                <span
+                  className={`px-3 py-1 rounded text-sm font-semibold ${
+                    selectedGame.status === "active"
+                      ? "bg-green-100 text-green-800"
+                      : "bg-gray-100 text-gray-800"
+                  }`}
+                >
+                  {selectedGame.status === "active" ? "Aktiv" : "Beendet"}
+                </span>
+              </div>
+
+              <h3 className="text-xl font-semibold text-gray-700 mb-4">
+                🏆 Spielstand
+              </h3>
+              {teamScores.length > 0 ? (
+                <div className="space-y-2 mb-6">
+                  {teamScores.map((team, index) => (
+                    <div
+                      key={team.team_id}
+                      className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-2xl font-bold text-gray-400">
+                          #{index + 1}
+                        </span>
+                        <span className="font-semibold text-gray-800">
+                          {team.team_name}
+                        </span>
+                      </div>
+                      <span className="text-xl font-bold text-red-600">
+                        {team.total_points} Pkt
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500 mb-6">Noch keine Punkte vergeben</p>
+              )}
+
+              <h3 className="text-xl font-semibold text-gray-700 mb-4">
+                📋 Runden
+              </h3>
+              {gameRounds.length > 0 ? (
+                <div className="space-y-3">
+                  {gameRounds.map((round) => (
+                    <div
+                      key={round.id}
+                      className="border rounded-lg p-4 hover:bg-gray-50 cursor-pointer"
+                      onClick={() => {
+                        setSelectedRound(round);
+                        setRoundView("detail");
+                        setMainView("rounds");
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="font-semibold text-gray-800">
+                            Runde {round.round_number}: {round.category}
+                          </h4>
+                          {round.completed_at && (
+                            <p className="text-sm text-gray-600">
+                              Abgeschlossen:{" "}
+                              {new Date(round.completed_at).toLocaleDateString(
+                                "de-DE"
+                              )}
+                            </p>
+                          )}
+                        </div>
+                        <span
+                          className={`text-xs px-2 py-1 rounded ${
+                            round.status === "active"
+                              ? "bg-green-100 text-green-800"
+                              : round.status === "completed"
+                              ? "bg-blue-100 text-blue-800"
+                              : "bg-yellow-100 text-yellow-800"
+                          }`}
+                        >
+                          {round.status === "active"
+                            ? "Läuft"
+                            : round.status === "completed"
+                            ? "Beendet"
+                            : "Wartet"}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-gray-500">Noch keine Runden erstellt</p>
+              )}
             </div>
           </div>
         )}
