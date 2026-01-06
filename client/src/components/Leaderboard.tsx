@@ -8,37 +8,50 @@ interface TeamScore {
   round_scores: { [key: number]: number }
 }
 
-interface LeaderBoardProps {
-  onBackToHome: () => void;
+interface Game {
+  id: string
+  name: string
+  date: string
+  status: string
 }
 
-
+interface LeaderBoardProps {
+  onBackToHome: () => void
+}
 
 export default function Leaderboard({ onBackToHome }: LeaderBoardProps) {
   const [scores, setScores] = useState<TeamScore[]>([])
   const [rounds, setRounds] = useState<number[]>([])
+  const [activeGame, setActiveGame] = useState<Game | null>(null)
 
   useEffect(() => {
-    loadScores()
-    loadRounds()
-
-    // Realtime-Updates
-    const channel = supabase
-      .channel('leaderboard')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'answers' }, () => {
-        loadScores()
-      })
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
+    loadActiveGame()
   }, [])
 
+  useEffect(() => {
+    if (activeGame) {
+      loadRounds()
+      loadScores()
+    }
+  }, [activeGame])
+
+  const loadActiveGame = async () => {
+    const { data } = await supabase
+      .from("games")
+      .select("*")
+      .eq("status", "active")
+      .single()
+
+    setActiveGame(data || null)
+  }
+
   const loadRounds = async () => {
+    if (!activeGame) return
+
     const { data } = await supabase
       .from('rounds')
       .select('round_number')
+      .eq('game_id', activeGame.id)
       .order('round_number')
 
     if (data) {
@@ -47,38 +60,53 @@ export default function Leaderboard({ onBackToHome }: LeaderBoardProps) {
   }
 
   const loadScores = async () => {
-    // Lade Teams
-    const { data: teams } = await supabase
-      .from('teams')
-      .select('id, name')
+    if (!activeGame) return
 
-    if (!teams) return
+    // Lade Teams über game_teams Join-Tabelle
+    const { data: gameTeams } = await supabase
+      .from('game_teams')
+      .select(`
+        team_id,
+        teams (
+          id,
+          name
+        )
+      `)
+      .eq("game_id", activeGame.id)
 
-    // Lade alle bewerteten Antworten
+    if (!gameTeams) return
+
+    // Lade alle bewerteten Antworten mit round_number
     const { data: answers } = await supabase
       .from('answers')
       .select(`
         team_id,
         points,
-        questions!inner(
-          round_id,
-          rounds!inner(round_number)
-        )
+        round_id,
+        rounds!inner(round_number)
       `)
       .eq('evaluated', true)
 
-    const teamScores: TeamScore[] = teams.map(team => {
+    // Erstelle TeamScore für jedes Team
+    const teamScores: TeamScore[] = gameTeams.map(gt => {
+      // Team-Daten aus dem nested object holen
+      const team = gt.teams as any
+      
+      // Antworten für dieses Team
       const teamAnswers = answers?.filter((a: any) => a.team_id === team.id) || []
+      
+      // Punkte pro Runde berechnen
       const roundScores: { [key: number]: number } = {}
       
       teamAnswers.forEach((answer: any) => {
-        const roundNum = answer.questions.rounds.round_number
+        const roundNum = answer.rounds.round_number
         if (!roundScores[roundNum]) {
           roundScores[roundNum] = 0
         }
         roundScores[roundNum] += answer.points || 0
       })
 
+      // Gesamtpunkte
       const totalPoints = Object.values(roundScores).reduce((sum, points) => sum + points, 0)
 
       return {
@@ -89,7 +117,7 @@ export default function Leaderboard({ onBackToHome }: LeaderBoardProps) {
       }
     })
 
-    // Sortiere nach Gesamtpunktzahl
+    // Sortiere nach Gesamtpunktzahl (höchste zuerst)
     teamScores.sort((a, b) => b.total_points - a.total_points)
     setScores(teamScores)
   }
@@ -97,16 +125,29 @@ export default function Leaderboard({ onBackToHome }: LeaderBoardProps) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-500 to-pink-600 p-4">
       <div className="max-w-6xl mx-auto">
-         <div className="flex gap-3">
-              <button
-                onClick={onBackToHome}
-                className="flex items-center text-gray-600 hover:text-gray-800 transition"
-              >
-                
-           <div className="text-5xl mb-4">🏠</div>
+        <div className="mb-4">
+          <button
+            onClick={onBackToHome}
+            title='Zurück'
+            className="flex items-center text-white hover:text-gray-200 transition"
+          >
+             <svg
+                  className="w-5 h-5 mr-2"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
+                  />
+                </svg>
+                Hauptmenü
               </button>
-
         </div>
+
         <div className="bg-white rounded-lg shadow-xl p-6 mb-6">
           <h1 className="text-4xl font-bold text-gray-800 text-center mb-2">
             🏆 Leaderboard

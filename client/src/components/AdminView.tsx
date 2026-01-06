@@ -89,22 +89,29 @@ export default function AdminView({ onBackToHome }: AdminViewProps) {
   const [selectedTeamForEval, setSelectedTeamForEval] = useState<string | null>(
     null
   );
-const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.select();
+  const handleFocus = (event: React.FocusEvent<HTMLInputElement>) =>
+    event.target.select();
   const [newCategory, setNewCategory] = useState("");
   const [newQuestions, setNewQuestions] = useState<string[]>(
     Array(10).fill("")
   );
-  const [newQuestionCategories, setNewQuestionCategories] = useState<(string | null)[]>(
-    Array(10).fill(null)
-  );
+  const [newQuestionCategories, setNewQuestionCategories] = useState<
+    (string | null)[]
+  >(Array(10).fill(null));
   const [categories, setCategories] = useState<Category[]>([]);
 
   const [mainView, setMainView] = useState<
-    "overview" | "rounds" | "teams" | "history" | "create-round" | "games" | "game-detail"
+    | "overview"
+    | "rounds"
+    | "teams"
+    | "history"
+    | "create-round"
+    | "games"
+    | "game-detail"
   >("overview");
-  const [roundView, setRoundView] = useState<"list" | "detail" | "evaluate" | "create">(
-    "list"
-  );
+  const [roundView, setRoundView] = useState<
+    "list" | "detail" | "evaluate" | "create"
+  >("list");
 
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog>({
     show: false,
@@ -134,7 +141,6 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
     if (isAuthenticated) {
       loadActiveGame();
       loadAllGames();
-      loadTeams();
       loadCategories();
     }
   }, [isAuthenticated]);
@@ -142,6 +148,12 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
   useEffect(() => {
     if (activeGame) {
       loadRounds();
+    }
+  }, [activeGame]);
+
+    useEffect(() => {
+    if (activeGame) {
+      loadTeams();
     }
   }, [activeGame]);
 
@@ -233,14 +245,14 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       return;
     }
 
-    const { data } = await supabase
+    const { data: gameTeams } = await supabase
       .from("game_teams")
-      .select("teams(*)")
+      .select("team_id, teams ( id, name )")
       .eq("game_id", targetGame.id)
       .order("created_at");
 
-    if (data) {
-      setTeams(data.map((gt: any) => gt.teams).filter(Boolean));
+    if (gameTeams) {
+      setTeams(gameTeams.map((gt: any) => gt.teams).filter(Boolean));
     } else {
       setTeams([]);
     }
@@ -264,11 +276,16 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       .select("team_id")
       .eq("game_id", targetGame.id);
 
-    if (allTeamsData && gameTeamsData) {
-      const gameTeamIds = new Set(gameTeamsData.map((gt: any) => gt.team_id));
-      const availableTeams = allTeamsData.filter(
-        (team) => !gameTeamIds.has(team.id)
-      );
+    if (allTeamsData) {
+      let availableTeams: Team[] = [];
+      if (gameTeamsData) {
+        const gameTeamIds = new Set(gameTeamsData.map((gt: any) => gt.team_id));
+        availableTeams = allTeamsData.filter(
+          (team) => !gameTeamIds.has(team.id)
+        );
+      } else {
+        availableTeams = allTeamsData;
+      }
       setAvailableTeams(availableTeams);
     } else {
       setAvailableTeams([]);
@@ -322,7 +339,10 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       const questions = data
         .map((rq: any) => rq.questions)
         .filter(Boolean)
-        .sort((a: any, b: any) => (a.question_number || 0) - (b.question_number || 0));
+        .sort(
+          (a: any, b: any) =>
+            (a.question_number || 0) - (b.question_number || 0)
+        );
       setQuestions(questions);
     } else {
       setQuestions([]);
@@ -414,7 +434,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
         question_text: a.questions.question_text,
         question_id: a.question_id,
       })) || [];
-      formatted.sort((a, b) => a.question_number - b.question_number);
+    formatted.sort((a, b) => a.question_number - b.question_number);
     setTeamAnswers(formatted);
   };
 
@@ -580,7 +600,9 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
     }
   };
 
-  const handleCategorySelect = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleCategorySelect = async (
+    e: React.ChangeEvent<HTMLSelectElement>
+  ) => {
     const value = e.target.value;
     if (selectedRound && value) {
       await updateRoundCategory(selectedRound.id, value);
@@ -660,13 +682,26 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
   };
 
   const loadGameTeams = async (gameId: string) => {
-    const { data } = await supabase
-      .from("teams")
-      .select("*")
+    const { data: gameTeams } = await supabase
+      .from("game_teams")
+      .select(
+        `
+        team_id,
+        teams (
+          id,
+          name
+        )
+      `
+      )
       .eq("game_id", gameId)
       .order("name");
 
-    setTeams(data || []);
+    if (!gameTeams) {
+      return;
+    }
+
+    const teams = gameTeams.map((gt: any) => gt.teams).filter(Boolean);
+    setTeams(teams || []);
   };
 
   const completeGame = async (gameId: string) => {
@@ -711,7 +746,8 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
     setConfirmDialog({
       show: true,
       title: "Spiel löschen",
-      message: "Möchten Sie dieses Spiel wirklich löschen? Alle Runden und Antworten werden ebenfalls gelöscht!",
+      message:
+        "Möchten Sie dieses Spiel wirklich löschen? Alle Runden und Antworten werden ebenfalls gelöscht!",
       onConfirm: async () => {
         try {
           // 1. Alle Runden dieses Spiels abrufen
@@ -725,7 +761,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
           // 2. Alle Answers aller Runden dieses Spiels löschen
           if (roundsData && roundsData.length > 0) {
             const roundIds = roundsData.map((r) => r.id);
-            
+
             // 1. Alle round_questions Einträge für diese Runden finden
             const { data: roundQuestionsData } = await supabase
               .from("round_questions")
@@ -733,8 +769,10 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
               .in("round_id", roundIds);
 
             if (roundQuestionsData && roundQuestionsData.length > 0) {
-              const questionIds = roundQuestionsData.map((rq) => rq.question_id);
-              
+              const questionIds = roundQuestionsData.map(
+                (rq) => rq.question_id
+              );
+
               // 2. Alle Answers für diese Fragen löschen
               const { error: answersError } = await supabase
                 .from("answers")
@@ -832,25 +870,27 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
         .eq("id", answerId);
       await loadTeamsWithAnswers(); // Nur Fortschritt!
     } catch (error) {
-      if(selectedTeamForEval != null)
+      if (selectedTeamForEval != null)
         await loadTeamAnswers(selectedTeamForEval); // Bei Fehler: Rollback
     }
   };
 
-  {/*
+  {
+    /*
      const incrementPoints = (answerId: string) => {
     const current = localPoints[answerId] ?? 0;
     const newPoints = Math.min(5, current + 0.5);
     evaluateAnswer(answerId, newPoints);
-  };
+  
 
   const decrementPoints = (answerId: string) => {
     const current = localPoints[answerId] ?? 0;
     const newPoints = Math.max(0, current - 0.5);
     evaluateAnswer(answerId, newPoints);
   };
-     */}
- 
+     
+ */
+  }
 
   const handlePointsInput = (answerId: string, value: string) => {
     const numValue = parseFloat(value) || 0;
@@ -958,9 +998,8 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
 
             <div className="space-y-4">
               {teamAnswers.map((answer) => {
-                const currentPoints =
-                  localPoints[answer.id] ?? answer.points;
-  
+                const currentPoints = localPoints[answer.id] ?? answer.points;
+
                 return (
                   <div
                     key={answer.id}
@@ -994,19 +1033,21 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
 
                       {/* Points Input */}
                       <input
-                      title="Punkte Eingabe"
+                        title="Punkte Eingabe"
                         type="number"
                         min="0"
                         max="5"
                         step="0.5"
                         value={currentPoints}
                         onFocus={handleFocus}
-                        onChange={(e) => handlePointsInput(answer.id, e.currentTarget.value)}                     
+                        onChange={(e) =>
+                          handlePointsInput(answer.id, e.currentTarget.value)
+                        }
                         className="w-20 px-3 py-2 text-center text-xl font-bold border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
                       />
 
                       {/* Increment Button */}
-                    {/*  <button
+                      {/*  <button
                         onClick={() => incrementPoints(answer.id)}
                         onKeyDown={(e) => handlePointsInput(answer.id, (e.target as HTMLInputElement).value)}
                         className="w-10 h-10 bg-gray-200 hover:bg-gray-300 rounded-lg flex items-center justify-center font-bold text-xl text-gray-700 transition"
@@ -1065,7 +1106,11 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
     const canEvaluate =
       selectedRound.status === "active" || selectedRound.status === "completed";
     const isReadOnly = selectedRound.status === "active";
-    const canRestart = selectedRound.status === "completed" && teamsWithAnswers.length < teams.length|| selectedRound.status === "active" && teamsWithAnswers.length < teams.length;
+    const canRestart =
+      (selectedRound.status === "completed" &&
+        teamsWithAnswers.length < teams.length) ||
+      (selectedRound.status === "active" &&
+        teamsWithAnswers.length < teams.length);
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-red-500 to-orange-600 p-4">
@@ -1174,7 +1219,10 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                 </h3>
                 <div className="space-y-3">
                   {questions.map((q) => (
-                    <div key={q.id} className="border-l-4 border-red-600 pl-3 py-2">
+                    <div
+                      key={q.id}
+                      className="border-l-4 border-red-600 pl-3 py-2"
+                    >
                       <div className="flex items-center gap-2 mb-2">
                         <span className="text-gray-600 font-medium w-8">
                           {q.question_number}.
@@ -1200,7 +1248,10 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                 </h3>
                 <div className="space-y-2">
                   {questions.map((q) => (
-                    <div key={q.id} className="p-3 bg-gray-50 rounded-lg border-l-4 border-red-600">
+                    <div
+                      key={q.id}
+                      className="p-3 bg-gray-50 rounded-lg border-l-4 border-red-600"
+                    >
                       <div className="flex items-center gap-2 mb-2">
                         <span className="font-medium text-gray-700">
                           {q.question_number}.
@@ -1379,7 +1430,9 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
           {selectedGame && (
             <div className="text-gray-600 mt-2">
               Ausgewähltes Spiel:{" "}
-              <span className="font-semibold text-blue-600">{selectedGame.name}</span>
+              <span className="font-semibold text-blue-600">
+                {selectedGame.name}
+              </span>
             </div>
           )}
 
@@ -1492,75 +1545,75 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                 </div>
                 <div className="space-y-3">
                   {rounds.map((round) => (
-                <div
-                  key={round.id}
-                  className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
-                >
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3">
-                      <h3 className="font-semibold text-gray-800">
-                        Runde {round.round_number}: {round.category}
-                      </h3>
-                      <span
-                        className={`text-xs px-2 py-1 rounded ${
-                          round.status === "active"
-                            ? "bg-green-100 text-green-800"
-                            : round.status === "completed"
-                            ? "bg-gray-100 text-gray-800"
-                            : "bg-yellow-100 text-yellow-800"
-                        }`}
-                      >
-                        {round.status === "active"
-                          ? "Läuft"
-                          : round.status === "completed"
-                          ? "Abgeschlossen"
-                          : "Wartet"}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        setSelectedRound(round);
-                        setRoundView("detail");
-                      }}
-                      className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+                    <div
+                      key={round.id}
+                      className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
                     >
-                      Details
-                    </button>
-                    {round.status === "waiting" && (
-                      <>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3">
+                          <h3 className="font-semibold text-gray-800">
+                            Runde {round.round_number}: {round.category}
+                          </h3>
+                          <span
+                            className={`text-xs px-2 py-1 rounded ${
+                              round.status === "active"
+                                ? "bg-green-100 text-green-800"
+                                : round.status === "completed"
+                                ? "bg-gray-100 text-gray-800"
+                                : "bg-yellow-100 text-yellow-800"
+                            }`}
+                          >
+                            {round.status === "active"
+                              ? "Läuft"
+                              : round.status === "completed"
+                              ? "Abgeschlossen"
+                              : "Wartet"}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
                         <button
-                          onClick={() => startRound(round.id)}
-                          className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
+                          onClick={() => {
+                            setSelectedRound(round);
+                            setRoundView("detail");
+                          }}
+                          className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
                         >
-                          Starten
+                          Details
                         </button>
-                        <button
-                          onClick={() => deleteRound(round)}
-                          className="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
-                        >
-                          Löschen
-                        </button>
-                      </>
-                    )}
-                    {round.status === "active" && (
-                      <button
-                        onClick={() => completeRound(round.id)}
-                        className="px-3 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 text-sm"
-                      >
-                        Beenden
-                      </button>
-                    )}
-                  </div>
+                        {round.status === "waiting" && (
+                          <>
+                            <button
+                              onClick={() => startRound(round.id)}
+                              className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
+                            >
+                              Starten
+                            </button>
+                            <button
+                              onClick={() => deleteRound(round)}
+                              className="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
+                            >
+                              Löschen
+                            </button>
+                          </>
+                        )}
+                        {round.status === "active" && (
+                          <button
+                            onClick={() => completeRound(round.id)}
+                            className="px-3 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 text-sm"
+                          >
+                            Beenden
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {rounds.length === 0 && (
+                    <p className="text-center text-gray-500 py-8">
+                      Noch keine Runden erstellt
+                    </p>
+                  )}
                 </div>
-              ))}
-              {rounds.length === 0 && (
-                <p className="text-center text-gray-500 py-8">
-                  Noch keine Runden erstellt
-                </p>
-              )}
-            </div>
               </>
             )}
 
@@ -1614,9 +1667,13 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                           // Ermögliche freie Eingabe für neue Kategorie
                           const input = prompt("Neue Kategorie eingeben:");
                           if (input?.trim()) {
-                            const created = await createNewCategoryForRound(input.trim());
+                            const created = await createNewCategoryForRound(
+                              input.trim()
+                            );
                             if (created) {
-                              alert(`Kategorie "${input.trim()}" erstellt und ausgewählt!`);
+                              alert(
+                                `Kategorie "${input.trim()}" erstellt und ausgewählt!`
+                              );
                             }
                           }
                         }}
@@ -1625,14 +1682,16 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                         Neu
                       </button>
                     </div>
-
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Fragen (10 Stück) mit Kategorien
                     </label>
                     {newQuestions.map((q, index) => (
-                      <div key={index} className="mb-3 p-3 bg-gray-50 rounded-lg">
+                      <div
+                        key={index}
+                        className="mb-3 p-3 bg-gray-50 rounded-lg"
+                      >
                         <input
                           type="text"
                           value={q}
@@ -1645,7 +1704,6 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                           placeholder={`Frage ${index + 1}`}
                           required
                         />
-                      
                       </div>
                     ))}
                   </div>
@@ -1674,7 +1732,9 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                     className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
                   >
                     <div>
-                      <h3 className="font-semibold text-gray-800">{team.name}</h3>
+                      <h3 className="font-semibold text-gray-800">
+                        {team.name}
+                      </h3>
                       <p className="text-sm text-gray-600">
                         {team.members_count}{" "}
                         {team.members_count === 1 ? "Mitglied" : "Mitglieder"}
@@ -1797,7 +1857,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
               <h2 className="text-2xl font-bold text-gray-800 mb-4">
                 Spiele-Verwaltung
               </h2>
-              
+
               {activeGame && (
                 <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
                   <div className="flex justify-between items-center">
