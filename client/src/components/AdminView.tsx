@@ -17,10 +17,17 @@ interface Round {
   completed_at: string | null;
 }
 
+interface Category {
+  id: string;
+  bezeichnung: string;
+}
+
 interface Question {
   id: string;
   question_number: number;
   question_text: string;
+  category_id: string | null;
+  categories: Category | null;
 }
 
 interface Team {
@@ -87,6 +94,10 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
   const [newQuestions, setNewQuestions] = useState<string[]>(
     Array(10).fill("")
   );
+  const [newQuestionCategories, setNewQuestionCategories] = useState<(string | null)[]>(
+    Array(10).fill(null)
+  );
+  const [categories, setCategories] = useState<Category[]>([]);
 
   const [mainView, setMainView] = useState<
     "overview" | "rounds" | "teams" | "history" | "create-round" | "games" | "game-detail"
@@ -110,6 +121,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
   const [gameRounds, setGameRounds] = useState<Round[]>([]);
   const [teamScores, setTeamScores] = useState<TeamScore[]>([]);
   const [newGameName, setNewGameName] = useState("");
+  const [availableTeams, setAvailableTeams] = useState<Team[]>([]);
 
   useEffect(() => {
     const adminAuth = localStorage.getItem("adminAuth");
@@ -123,6 +135,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       loadActiveGame();
       loadAllGames();
       loadTeams();
+      loadCategories();
     }
   }, [isAuthenticated]);
 
@@ -191,6 +204,15 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
     setAllGames(data || []);
   };
 
+  const loadCategories = async () => {
+    const { data } = await supabase
+      .from("categories")
+      .select("*")
+      .order("bezeichnung");
+
+    setCategories(data || []);
+  };
+
   const loadRounds = async () => {
     const targetGame = selectedGame || activeGame;
     if (!targetGame) return;
@@ -205,21 +227,106 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
   };
 
   const loadTeams = async () => {
-    const { data } = await supabase.from("teams").select("*").order("name");
+    const targetGame = selectedGame || activeGame;
+    if (!targetGame) {
+      setTeams([]);
+      return;
+    }
 
-    setTeams(data || []);
+    const { data } = await supabase
+      .from("game_teams")
+      .select("teams(*)")
+      .eq("game_id", targetGame.id)
+      .order("created_at");
+
+    if (data) {
+      setTeams(data.map((gt: any) => gt.teams).filter(Boolean));
+    } else {
+      setTeams([]);
+    }
+  };
+
+  const loadAvailableTeamsForAdding = async () => {
+    const targetGame = selectedGame || activeGame;
+    if (!targetGame) {
+      setAvailableTeams([]);
+      return;
+    }
+
+    // Lade Teams, die NICHT in diesem Spiel sind
+    const { data: allTeamsData } = await supabase
+      .from("teams")
+      .select("*")
+      .order("name");
+
+    const { data: gameTeamsData } = await supabase
+      .from("game_teams")
+      .select("team_id")
+      .eq("game_id", targetGame.id);
+
+    if (allTeamsData && gameTeamsData) {
+      const gameTeamIds = new Set(gameTeamsData.map((gt: any) => gt.team_id));
+      const availableTeams = allTeamsData.filter(
+        (team) => !gameTeamIds.has(team.id)
+      );
+      setAvailableTeams(availableTeams);
+    } else {
+      setAvailableTeams([]);
+    }
+  };
+
+  const addTeamToGame = async (teamId: string) => {
+    const targetGame = selectedGame || activeGame;
+    if (!targetGame) return;
+
+    const { error } = await supabase
+      .from("game_teams")
+      .insert([{ game_id: targetGame.id, team_id: teamId }]);
+
+    if (!error) {
+      await loadTeams();
+      await loadAvailableTeamsForAdding();
+      alert("Team hinzugefügt!");
+    } else {
+      alert("Fehler beim Hinzufügen des Teams!");
+    }
   };
 
   const loadQuestions = async () => {
     if (!selectedRound) return;
 
-    const { data } = await supabase
-      .from("questions")
-      .select("*")
+    const { data, error } = await supabase
+      .from("round_questions")
+      .select(
+        `
+        question_id,
+        questions(
+          id,
+          question_number,
+          question_text,
+          category_id,
+          categories(id, bezeichnung)
+        )
+      `
+      )
       .eq("round_id", selectedRound.id)
-      .order("question_number");
+      .order("question_order");
 
-    setQuestions(data || []);
+    if (error) {
+      console.error("Error loading questions:", error);
+      setQuestions([]);
+      return;
+    }
+
+    if (data && data.length > 0) {
+      const questions = data
+        .map((rq: any) => rq.questions)
+        .filter(Boolean)
+        .sort((a: any, b: any) => (a.question_number || 0) - (b.question_number || 0));
+      setQuestions(questions);
+    } else {
+      setQuestions([]);
+    }
   };
 
   const loadTeamsWithAnswers = async () => {
@@ -237,6 +344,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
         teams!inner(name)
       `
       )
+      .eq("round_id", selectedRound.id)
       .in("question_id", questionIds);
 
     if (!data) return;
@@ -290,6 +398,7 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
         questions!inner(question_number, question_text)
       `
       )
+      .eq("round_id", selectedRound.id)
       .eq("team_id", teamId)
       .in("question_id", questionIds);
 
@@ -337,15 +446,31 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
     const questionsToInsert = newQuestions
       .filter((q) => q.trim())
       .map((q, index) => ({
-        round_id: round.id,
         question_number: index + 1,
         question_text: q,
+        category_id: newQuestionCategories[index] || null,
       }));
 
-    await supabase.from("questions").insert(questionsToInsert);
+    // Erst die Questions erstellen
+    const { data: createdQuestions } = await supabase
+      .from("questions")
+      .insert(questionsToInsert)
+      .select();
+
+    // Dann die round_questions Einträge erstellen
+    if (createdQuestions && createdQuestions.length > 0) {
+      const roundQuestions = createdQuestions.map((q, index) => ({
+        round_id: round.id,
+        question_id: q.id,
+        question_order: index + 1,
+      }));
+
+      await supabase.from("round_questions").insert(roundQuestions);
+    }
 
     setNewCategory("");
     setNewQuestions(Array(10).fill(""));
+    setNewQuestionCategories(Array(10).fill(null));
     loadRounds();
     setRoundView("list");
     alert("Runde erfolgreich erstellt!");
@@ -383,11 +508,23 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       title: "Runde löschen",
       message: `Möchten Sie die Runde "${round.category}" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.`,
       onConfirm: async () => {
-        await supabase.from("rounds").delete().eq("id", round.id);
+        try {
+          // round_questions Einträge werden durch CASCADE automatisch gelöscht
+          // answers Einträge werden auch cascading gelöscht
+          const { error } = await supabase
+            .from("rounds")
+            .delete()
+            .eq("id", round.id);
 
-        loadRounds();
-        setConfirmDialog({ ...confirmDialog, show: false });
-        alert("Runde gelöscht!");
+          if (error) throw error;
+
+          loadRounds();
+          setConfirmDialog({ ...confirmDialog, show: false });
+          alert("Runde gelöscht!");
+        } catch (error) {
+          console.error("Fehler beim Löschen der Runde:", error);
+          alert("Fehler beim Löschen der Runde!");
+        }
       },
     });
   };
@@ -396,13 +533,22 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
     setConfirmDialog({
       show: true,
       title: "Team löschen",
-      message: `Möchten Sie das Team "${team.name}" wirklich löschen? Alle Antworten dieses Teams werden ebenfalls gelöscht.`,
+      message: `Möchten Sie das Team "${team.name}" wirklich löschen? Alle Antworten und Verbindungen dieses Teams werden ebenfalls gelöscht.`,
       onConfirm: async () => {
-        await supabase.from("teams").delete().eq("id", team.id);
+        try {
+          // 1. Lösche game_teams Einträge
+          await supabase.from("game_teams").delete().eq("team_id", team.id);
 
-        loadTeams();
-        setConfirmDialog({ ...confirmDialog, show: false });
-        alert("Team gelöscht!");
+          // 2. Lösche das Team selbst (cascades löscht auch answers)
+          await supabase.from("teams").delete().eq("id", team.id);
+
+          loadTeams();
+          setConfirmDialog({ ...confirmDialog, show: false });
+          alert("Team gelöscht!");
+        } catch (error) {
+          console.error("Fehler beim Löschen des Teams:", error);
+          alert("Fehler beim Löschen des Teams!");
+        }
       },
     });
   };
@@ -414,6 +560,64 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
       .eq("id", questionId);
 
     loadQuestions();
+  };
+
+  const updateRoundCategory = async (roundId: string, newCategory: string) => {
+    const { error } = await supabase
+      .from("rounds")
+      .update({ category: newCategory })
+      .eq("id", roundId);
+
+    if (!error && selectedRound) {
+      setSelectedRound({ ...selectedRound, category: newCategory });
+      // Aktualisiere auch den rounds State für die Runden-Verwaltung
+      setRounds(
+        rounds.map((r) =>
+          r.id === roundId ? { ...r, category: newCategory } : r
+        )
+      );
+      loadGameRounds(selectedRound.game_id);
+    }
+  };
+
+  const handleCategorySelect = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const value = e.target.value;
+    if (selectedRound && value) {
+      await updateRoundCategory(selectedRound.id, value);
+    }
+  };
+
+  const handleCreateCategory = async () => {
+    if (!newCategory.trim() || !selectedRound) return;
+
+    const { data, error } = await supabase
+      .from("categories")
+      .insert([{ bezeichnung: newCategory }])
+      .select()
+      .single();
+
+    if (!error && data) {
+      setCategories([...categories, data]);
+      await updateRoundCategory(selectedRound.id, newCategory);
+      setNewCategory("");
+    }
+  };
+
+  const createNewCategoryForRound = async (categoryName: string) => {
+    if (!categoryName.trim()) return;
+
+    const { data, error } = await supabase
+      .from("categories")
+      .insert([{ bezeichnung: categoryName }])
+      .select()
+      .single();
+
+    if (!error && data) {
+      setCategories([...categories, data]);
+      setNewCategory(categoryName);
+      return true;
+    }
+    return false;
   };
 
   const loadGameRounds = async (gameId: string) => {
@@ -522,14 +726,16 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
           if (roundsData && roundsData.length > 0) {
             const roundIds = roundsData.map((r) => r.id);
             
-            // Erst Answers löschen
-            const { data: questionsData } = await supabase
-              .from("questions")
-              .select("id")
+            // 1. Alle round_questions Einträge für diese Runden finden
+            const { data: roundQuestionsData } = await supabase
+              .from("round_questions")
+              .select("question_id")
               .in("round_id", roundIds);
 
-            if (questionsData && questionsData.length > 0) {
-              const questionIds = questionsData.map((q) => q.id);
+            if (roundQuestionsData && roundQuestionsData.length > 0) {
+              const questionIds = roundQuestionsData.map((rq) => rq.question_id);
+              
+              // 2. Alle Answers für diese Fragen löschen
               const { error: answersError } = await supabase
                 .from("answers")
                 .delete()
@@ -538,15 +744,15 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
               if (answersError) throw answersError;
             }
 
-            // Dann Questions löschen
-            const { error: deleteQuestionsError } = await supabase
-              .from("questions")
+            // 3. round_questions Einträge löschen (CASCADE wird Answers berücksichtigen)
+            const { error: deleteRoundQuestionsError } = await supabase
+              .from("round_questions")
               .delete()
               .in("round_id", roundIds);
 
-            if (deleteQuestionsError) throw deleteQuestionsError;
+            if (deleteRoundQuestionsError) throw deleteRoundQuestionsError;
 
-            // Dann Rounds löschen
+            // 4. Rounds löschen (CASCADE wird team_scores berücksichtigen)
             const { error: deleteRoundsError } = await supabase
               .from("rounds")
               .delete()
@@ -908,9 +1114,58 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
           </div>
 
           <div className="bg-white rounded-lg shadow-xl p-6 mb-6">
-            <h2 className="text-2xl font-bold text-gray-800 mb-6">
-              Runde {selectedRound.round_number}: {selectedRound.category}
-            </h2>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-gray-800">
+                Runde {selectedRound.round_number}
+              </h2>
+              {canEdit && (
+                <div className="flex gap-2 items-end">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Kategorie
+                    </label>
+                    <select
+                      value={selectedRound.category}
+                      onChange={handleCategorySelect}
+                      title="Kategorie auswählen"
+                      className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+                    >
+                      <option value="">Kategorie wählen...</option>
+                      {categories.map((cat) => (
+                        <option key={cat.id} value={cat.bezeichnung}>
+                          {cat.bezeichnung}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex gap-1">
+                    <input
+                      type="text"
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
+                      placeholder="Neue Kategorie..."
+                      className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+                      onKeyPress={(e) => {
+                        if (e.key === "Enter") {
+                          handleCreateCategory();
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={handleCreateCategory}
+                      className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition font-medium"
+                    >
+                      Neu
+                    </button>
+                  </div>
+                </div>
+              )}
+              {isReadOnly && (
+                <div className="text-lg font-semibold text-red-600">
+                  {selectedRound.category}
+                </div>
+              )}
+            </div>
 
             {canEdit && (
               <div>
@@ -919,16 +1174,18 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                 </h3>
                 <div className="space-y-3">
                   {questions.map((q) => (
-                    <div key={q.id} className="flex items-center gap-3">
-                      <span className="text-gray-600 font-medium w-8">
-                        {q.question_number}.
-                      </span>
+                    <div key={q.id} className="border-l-4 border-red-600 pl-3 py-2">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-gray-600 font-medium w-8">
+                          {q.question_number}.
+                        </span>
+                      </div>
                       <input
                         title="Bearbeiten"
                         type="text"
                         value={q.question_text}
                         onChange={(e) => updateQuestion(q.id, e.target.value)}
-                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
+                        className="flex-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500"
                       />
                     </div>
                   ))}
@@ -943,10 +1200,12 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                 </h3>
                 <div className="space-y-2">
                   {questions.map((q) => (
-                    <div key={q.id} className="p-3 bg-gray-50 rounded-lg">
-                      <span className="font-medium text-gray-700">
-                        {q.question_number}.{" "}
-                      </span>
+                    <div key={q.id} className="p-3 bg-gray-50 rounded-lg border-l-4 border-red-600">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="font-medium text-gray-700">
+                          {q.question_number}.
+                        </span>
+                      </div>
                       <span className="text-gray-600">{q.question_text}</span>
                     </div>
                   ))}
@@ -1334,33 +1593,60 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Kategorie
                     </label>
-                    <input
-                      type="text"
-                      value={newCategory}
-                      onChange={(e) => setNewCategory(e.target.value)}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                      placeholder="z.B. Geschichte, Sport, Musik..."
-                      required
-                    />
+                    <div className="flex gap-2">
+                      <select
+                        value={newCategory}
+                        onChange={(e) => setNewCategory(e.target.value)}
+                        title="Kategorie auswählen oder neue erstellen"
+                        className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                        required
+                      >
+                        <option value="">Kategorie wählen...</option>
+                        {categories.map((cat) => (
+                          <option key={cat.id} value={cat.bezeichnung}>
+                            {cat.bezeichnung}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          // Ermögliche freie Eingabe für neue Kategorie
+                          const input = prompt("Neue Kategorie eingeben:");
+                          if (input?.trim()) {
+                            const created = await createNewCategoryForRound(input.trim());
+                            if (created) {
+                              alert(`Kategorie "${input.trim()}" erstellt und ausgewählt!`);
+                            }
+                          }
+                        }}
+                        className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition font-medium"
+                      >
+                        Neu
+                      </button>
+                    </div>
+
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Fragen (10 Stück)
+                      Fragen (10 Stück) mit Kategorien
                     </label>
                     {newQuestions.map((q, index) => (
-                      <input
-                        key={index}
-                        type="text"
-                        value={q}
-                        onChange={(e) => {
-                          const updated = [...newQuestions];
-                          updated[index] = e.target.value;
-                          setNewQuestions(updated);
-                        }}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg mb-2 focus:ring-2 focus:ring-red-500 focus:border-transparent"
-                        placeholder={`Frage ${index + 1}`}
-                        required
-                      />
+                      <div key={index} className="mb-3 p-3 bg-gray-50 rounded-lg">
+                        <input
+                          type="text"
+                          value={q}
+                          onChange={(e) => {
+                            const updated = [...newQuestions];
+                            updated[index] = e.target.value;
+                            setNewQuestions(updated);
+                          }}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg mb-2 focus:ring-2 focus:ring-red-500 focus:border-transparent"
+                          placeholder={`Frage ${index + 1}`}
+                          required
+                        />
+                      
+                      </div>
                     ))}
                   </div>
                   <button
@@ -1376,34 +1662,78 @@ const handleFocus = (event: React.FocusEvent<HTMLInputElement>) => event.target.
         )}
 
         {mainView === "teams" && (
-          <div className="bg-white rounded-lg shadow-xl p-6">
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">
-              Team-Verwaltung
-            </h2>
-            <div className="space-y-3">
-              {teams.map((team) => (
-                <div
-                  key={team.id}
-                  className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
-                >
-                  <div>
-                    <h3 className="font-semibold text-gray-800">{team.name}</h3>
-                    <p className="text-sm text-gray-600">
-                      {team.members_count}{" "}
-                      {team.members_count === 1 ? "Mitglied" : "Mitglieder"}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => deleteTeam(team)}
-                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+          <div className="space-y-6">
+            <div className="bg-white rounded-lg shadow-xl p-6">
+              <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                Teams im Spiel
+              </h2>
+              <div className="space-y-3">
+                {teams.map((team) => (
+                  <div
+                    key={team.id}
+                    className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
                   >
-                    Löschen
-                  </button>
+                    <div>
+                      <h3 className="font-semibold text-gray-800">{team.name}</h3>
+                      <p className="text-sm text-gray-600">
+                        {team.members_count}{" "}
+                        {team.members_count === 1 ? "Mitglied" : "Mitglieder"}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => deleteTeam(team)}
+                      className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                    >
+                      Löschen
+                    </button>
+                  </div>
+                ))}
+                {teams.length === 0 && (
+                  <p className="text-center text-gray-500 py-8">
+                    Noch keine Teams in diesem Spiel
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-lg shadow-xl p-6">
+              <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                Teams hinzufügen
+              </h2>
+              <button
+                onClick={() => loadAvailableTeamsForAdding()}
+                className="mb-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                Verfügbare Teams laden
+              </button>
+              {availableTeams.length > 0 ? (
+                <div className="space-y-3">
+                  {availableTeams.map((team) => (
+                    <div
+                      key={team.id}
+                      className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
+                    >
+                      <div>
+                        <h3 className="font-semibold text-gray-800">
+                          {team.name}
+                        </h3>
+                        <p className="text-sm text-gray-600">
+                          {team.members_count}{" "}
+                          {team.members_count === 1 ? "Mitglied" : "Mitglieder"}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => addTeamToGame(team.id)}
+                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                      >
+                        Hinzufügen
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              {teams.length === 0 && (
+              ) : (
                 <p className="text-center text-gray-500 py-8">
-                  Noch keine Teams registriert
+                  Keine verfügbaren Teams vorhanden
                 </p>
               )}
             </div>

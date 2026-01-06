@@ -1,10 +1,17 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 
+interface Category {
+  id: string
+  bezeichnung: string
+}
+
 interface Question {
   id: string
   question_number: number
   question_text: string
+  category_id: string | null
+  categories: Category | null
 }
 
 interface Round {
@@ -138,14 +145,31 @@ export default function TeamView({ onBackToHome }: TeamViewProps) {
     if (!currentRound) return
 
     const { data } = await supabase
-      .from('questions')
-      .select('*')
+      .from('round_questions')
+      .select(
+        `
+        question_id,
+        questions(
+          id,
+          question_number,
+          question_text,
+          category_id,
+          categories(id, bezeichnung)
+        )
+      `
+      )
       .eq('round_id', currentRound.id)
-      .order('question_number')
+      .order('question_order')
 
-    setQuestions(data || [])
-
-    
+    if (data) {
+      const questions = data
+        .map((rq: any) => rq.questions)
+        .filter(Boolean)
+        .sort((a: any, b: any) => (a.question_number || 0) - (b.question_number || 0))
+      setQuestions(questions)
+    } else {
+      setQuestions([])
+    }
   }
 
   const loadTeamAnswers = async () => {
@@ -224,6 +248,7 @@ export default function TeamView({ onBackToHome }: TeamViewProps) {
     if (!teamId || !currentRound) return
 
     const answersToInsert = questions.map(q => ({
+      round_id: currentRound.id,
       team_id: teamId,
       question_id: q.id,
       answer_text: answers[q.id] || '',
@@ -511,6 +536,11 @@ export default function TeamView({ onBackToHome }: TeamViewProps) {
             <form onSubmit={handleSubmit} className="space-y-4 mt-6">
               {questions.map((q) => (
                 <div key={q.id} className="border-b pb-4">
+                  <div className="mb-2">
+                    <span className="inline-block bg-blue-100 text-blue-800 text-xs font-semibold px-3 py-1 rounded-full mr-2">
+                      {q.categories?.bezeichnung || 'Keine Kategorie'}
+                    </span>
+                  </div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Frage {q.question_number}: {q.question_text}
                   </label>
